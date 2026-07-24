@@ -46,16 +46,6 @@ def init_db():
         )
     """)
 
-    # Track a single visit per user per post (message), so refreshing/
-    # re-clicking doesn't inflate the count
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_visits (
-            user_id INTEGER,
-            bot_db_id INTEGER,
-            PRIMARY KEY (user_id, bot_db_id)
-        )
-    """)
-
     # Main table with all fields the rest of the code relies on
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_bots (
@@ -72,8 +62,7 @@ def init_db():
             has_media INTEGER DEFAULT 0,
             media_type TEXT,
             likes INTEGER DEFAULT 0,
-            dislikes INTEGER DEFAULT 0,
-            visits INTEGER DEFAULT 0
+            dislikes INTEGER DEFAULT 0
         )
     """)
     conn.commit()
@@ -126,20 +115,6 @@ def get_bot_by_id(bot_db_id: int):
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else None
-
-
-def get_full_post_by_db_id(bot_db_id: int):
-    conn = sqlite3.connect("bots.db")
-    cursor = conn.cursor()
-    cursor.execute(
-        """SELECT id, post_id, title, link, description, hashtags, chat_id,
-                  creator_str, channel_message_id, has_media, media_type, visits
-           FROM user_bots WHERE id = ?""",
-        (bot_db_id,),
-    )
-    row = cursor.fetchone()
-    conn.close()
-    return row
 
 
 def get_post_by_post_id(post_id: str):
@@ -211,46 +186,6 @@ def set_user_vote(user_id: int, message_id: int, vote_type: str):
     conn.close()
 
 
-# --- VISIT HELPERS ---
-
-def try_register_visit(user_id: int, bot_db_id: int) -> bool:
-    """
-    Registers a visit for this user/post if they haven't already visited.
-    Returns True if this was a NEW visit (and visits count was incremented),
-    False if the user had already visited before (no double counting).
-    """
-    conn = sqlite3.connect("bots.db")
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT 1 FROM user_visits WHERE user_id = ? AND bot_db_id = ?",
-        (user_id, bot_db_id),
-    )
-    already_visited = cursor.fetchone() is not None
-
-    if already_visited:
-        conn.close()
-        return False
-
-    cursor.execute(
-        "INSERT INTO user_visits (user_id, bot_db_id) VALUES (?, ?)",
-        (user_id, bot_db_id),
-    )
-    cursor.execute("UPDATE user_bots SET visits = visits + 1 WHERE id = ?", (bot_db_id,))
-    conn.commit()
-    conn.close()
-    return True
-
-
-def increment_visits(bot_db_id: int):
-    """Unconditional increment - used by /search, where re-searching an ID is a real repeat view."""
-    conn = sqlite3.connect("bots.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE user_bots SET visits = visits + 1 WHERE id = ?", (bot_db_id,))
-    conn.commit()
-    conn.close()
-
-
 # --- POST FORMATTING / KEYBOARD HELPERS ---
 
 def build_post_keyboard(bot_db_id: int, link: str, chat_id: str, like_count: int = 0, dislike_count: int = 0):
@@ -260,12 +195,10 @@ def build_post_keyboard(bot_db_id: int, link: str, chat_id: str, like_count: int
             InlineKeyboardButton(f"👎 {dislike_count}", callback_data="vote_down"),
         ],
         [
-            # Callback button instead of url=, so we get a round-trip to the
-            # bot and can count the visit. query.answer(url=...) then opens
-            # the link client-side, so the UX is still a single tap.
+            # Direct url= button: single tap opens the user's link immediately.
             InlineKeyboardButton(
                 "Visit/သွားရောက်လည်ပတ်မည်။",
-                callback_data=f"visit_{bot_db_id}",
+                url=link,
             )
         ]
     ]
@@ -285,7 +218,7 @@ def build_post_keyboard(bot_db_id: int, link: str, chat_id: str, like_count: int
 
 
 def build_channel_caption(title: str, description: str, post_id: str, hashtags: str,
-                           visits: int, creator_str: str) -> str:
+                           creator_str: str) -> str:
     hashtag_str = f"🏷️ {hashtags}\n" if hashtags and hashtags != "None" else ""
     desc_str = f"📝 <b>Description:</b>\n{description}\n\n" if description else ""
     return (
@@ -293,65 +226,8 @@ def build_channel_caption(title: str, description: str, post_id: str, hashtags: 
         f"{desc_str}"
         f"🆔 <b>ID:</b> <code>{post_id}</code>\n"
         f"{hashtag_str}"
-        f"👁️ <b>Visits: {visits}</b>\n\n"
         f"👤 Created by {creator_str}"
     )
-
-
-async def refresh_channel_post(context: ContextTypes.DEFAULT_TYPE, bot_db_id: int):
-    """Re-fetch the post from DB and edit the live channel message with the current visit count."""
-    row = get_full_post_by_db_id(bot_db_id)
-    if not row:
-        return
-    (_id, post_id, title, link, description, hashtags, chat_id,
-     creator_str, channel_message_id, has_media, media_type, visits) = row
-
-    if not channel_message_id:
-        return
-
-    new_caption = build_channel_caption(title, description, post_id, hashtags, visits, creator_str)
-    reply_markup = build_post_keyboard(bot_db_id, link, chat_id)
-
-    try:
-        if has_media:
-            await context.bot.edit_message_caption(
-                chat_id=CHANNEL_ID,
-                message_id=channel_message_id,
-                caption=new_caption,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-            )
-        else:
-            await context.bot.edit_message_text(
-                chat_id=CHANNEL_ID,
-                message_id=channel_message_id,
-                text=new_caption,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-            )
-    except Exception as e:
-        # "Message is not modified" etc. - safe to ignore
-        logging.info(f"Channel post refresh skipped for bot_db_id={bot_db_id}: {e}")
-
-
-# --- VISIT BUTTON CALLBACK ---
-async def handle_visit_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    bot_db_id = int(query.data.split("visit_")[1])
-
-    link = get_bot_by_id(bot_db_id)
-    if not link:
-        await query.answer("❌ Link not found.", show_alert=True)
-        return
-
-    is_new_visit = try_register_visit(user_id, bot_db_id)
-
-    # Opens the destination link client-side, same UX as a url= button
-    await query.answer(url=link)
-
-    if is_new_visit:
-        await refresh_channel_post(context, bot_db_id)
 
 
 # --- SEARCH POST BY ID ---
@@ -375,9 +251,6 @@ async def search_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🆔 <b>ID:</b> <code>{search_id}</code>\n"
         f"{hashtag_str}"
     )
-
-    increment_visits(bot_db_id)  # counted here since /search is a real "view"
-    await refresh_channel_post(context, bot_db_id)  # keep the channel post's visit count in sync
 
     keyboard = [
         [InlineKeyboardButton("Visit/သွားရောက်လည်ပတ်မည်။", url=link)]
@@ -739,14 +612,13 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     has_media = 1 if media_list else 0
     media_type = "group" if len(media_list) > 1 else (media_list[0]["type"] if media_list else None)
 
-    # Temporary database insert to get a bot_db_id for the callback button,
-    # visits starts at 0
+    # Insert into DB first to get a bot_db_id (used for delete/vote callbacks)
     bot_db_id = add_bot_to_db(
         post_id, user_id, title, link, description, hashtags,
         user_chat_id or "None", creator_str, 0, has_media, media_type,
     )
 
-    formatted_post = build_channel_caption(title, description, post_id, hashtags, 0, creator_str)
+    formatted_post = build_channel_caption(title, description, post_id, hashtags, creator_str)
     reply_markup = build_post_keyboard(bot_db_id, link, user_chat_id or "None")
 
     sent_message = None
@@ -824,7 +696,6 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_delete_callback, pattern="^delbot_"))
 
     app.add_handler(CallbackQueryHandler(handle_button_clicks, pattern="^(vote_up|vote_down)$"))
-    app.add_handler(CallbackQueryHandler(handle_visit_click, pattern="^visit_"))
 
     print("Bot is running...")
     app.run_polling()
