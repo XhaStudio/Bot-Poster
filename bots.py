@@ -342,7 +342,7 @@ async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_T
                 logging.info(f"Successfully deleted message {channel_msg_id} from channel.")
             except Exception as e:
                 logging.error(f"Failed to delete channel post (Message ID: {channel_msg_id}): {e}")
-                await update.effective_message.reply_text(f"⚠️ Channel Post Deletion Warning: {e}")
+                await update.effective_message.reply_text(f"⚠️ ချန်နယ်ပို့စ် ဖျက်ခြင်းသတိပေးချက်- {e}")
 
         try:
             await query.edit_message_text("✅ Post ကို ဖျက်လိုက်ပါပြီ!")
@@ -452,6 +452,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["current_state"] = TITLE
     await update.message.reply_text(
         "Welcome to the Bot Submission Assistant! 🤖\n\n"
+        "channel join ရန် https://t.me/AdvertiseYourBotChat\n\n"
         "Commands:\n"
         "• /start - Bot အသစ် တင်ရန်\n"
         "• /mybot - တင်ထားသော Bot များကို ပြန်ကြည့်ရန်\n"
