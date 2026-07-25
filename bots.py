@@ -3,6 +3,7 @@ import sqlite3
 import re
 import random
 import string
+import os
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -28,6 +29,11 @@ CHANNEL_ID = "@AdvertiseYourBotChat"
 
 # Conversation States
 TITLE, LINK, DESCRIPTION, HASHTAGS, CHAT_ID, CREATOR, MEDIA = range(7)
+
+# --- RENDER / WEBHOOK CONFIG ---
+PORT = int(os.environ.get("PORT", "8443"))
+RENDER_HOST = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+WEBHOOK_URL = f"https://{RENDER_HOST}/{BOT_TOKEN}" if RENDER_HOST else None
 
 
 # --- DATABASE SETUP ---
@@ -59,12 +65,21 @@ def init_db():
             chat_id TEXT,
             creator_str TEXT,
             channel_message_id INTEGER,
+            extra_message_id INTEGER DEFAULT 0,
             has_media INTEGER DEFAULT 0,
             media_type TEXT,
             likes INTEGER DEFAULT 0,
             dislikes INTEGER DEFAULT 0
         )
     """)
+    
+    # Migrate existing DBs: add extra_message_id if missing
+    try:
+        cursor.execute("ALTER TABLE user_bots ADD COLUMN extra_message_id INTEGER DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
     conn.commit()
     conn.close()
 
@@ -83,16 +98,16 @@ def generate_unique_post_id() -> str:
 
 def add_bot_to_db(post_id: str, user_id: int, title: str, link: str, description: str,
                    hashtags: str, chat_id: str, creator_str: str, channel_message_id: int,
-                   has_media: int, media_type: str) -> int:
+                   extra_message_id: int, has_media: int, media_type: str) -> int:
     conn = sqlite3.connect("bots.db")
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO user_bots
            (post_id, user_id, title, link, description, hashtags, chat_id,
-            creator_str, channel_message_id, has_media, media_type)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            creator_str, channel_message_id, extra_message_id, has_media, media_type)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (post_id, user_id, title, link, description, hashtags, chat_id,
-         creator_str, channel_message_id, has_media, media_type),
+         creator_str, channel_message_id, extra_message_id, has_media, media_type),
     )
     bot_db_id = cursor.lastrowid
     conn.commit()
@@ -100,10 +115,13 @@ def add_bot_to_db(post_id: str, user_id: int, title: str, link: str, description
     return bot_db_id
 
 
-def update_channel_message_id(bot_db_id: int, message_id: int):
+def update_channel_message_ids(bot_db_id: int, message_id: int, extra_message_id: int = 0):
     conn = sqlite3.connect("bots.db")
     cursor = conn.cursor()
-    cursor.execute("UPDATE user_bots SET channel_message_id = ? WHERE id = ?", (message_id, bot_db_id))
+    cursor.execute(
+        "UPDATE user_bots SET channel_message_id = ?, extra_message_id = ? WHERE id = ?",
+        (message_id, extra_message_id, bot_db_id)
+    )
     conn.commit()
     conn.close()
 
@@ -145,20 +163,20 @@ def delete_bot_from_db(bot_db_id: int, user_id: int):
     conn = sqlite3.connect("bots.db")
     cursor = conn.cursor()
 
-    # Get channel message ID before deleting record
-    cursor.execute("SELECT channel_message_id FROM user_bots WHERE id = ? AND user_id = ?", (bot_db_id, user_id))
+    # Get channel message IDs before deleting record
+    cursor.execute("SELECT channel_message_id, extra_message_id FROM user_bots WHERE id = ? AND user_id = ?", (bot_db_id, user_id))
     row = cursor.fetchone()
 
     if not row:
         conn.close()
-        return False, None
+        return False, None, None
 
-    msg_id = row[0]
+    msg_id, extra_msg_id = row
     cursor.execute("DELETE FROM user_bots WHERE id = ? AND user_id = ?", (bot_db_id, user_id))
     affected = cursor.rowcount
     conn.commit()
     conn.close()
-    return affected > 0, msg_id
+    return affected > 0, msg_id, extra_msg_id
 
 
 # --- VOTE HELPERS ---
@@ -207,12 +225,12 @@ def build_post_keyboard(bot_db_id: int, link: str, chat_id: str, like_count: int
         clean_chat_id = chat_id.strip()
         if not clean_chat_id.lstrip('-').isdigit() and not clean_chat_id.startswith("http"):
             review_url = f"https://t.me/{clean_chat_id.replace('@', '')}"
-            keyboard.append([InlineKeyboardButton("💬 Write a Review", url=review_url)])
+            keyboard.append([InlineKeyboardButton("💬 သုံးသပ်ချက်ရေးသားပါ", url=review_url)])
         elif clean_chat_id.startswith("-100"):
             review_url = f"https://t.me/c/{clean_chat_id.replace('-100', '')}/1"
-            keyboard.append([InlineKeyboardButton("💬 Write a Review", url=review_url)])
+            keyboard.append([InlineKeyboardButton("💬 သုံးသပ်ချက်ရေးသားပါ", url=review_url)])
         elif clean_chat_id.startswith("http://") or clean_chat_id.startswith("https://"):
-            keyboard.append([InlineKeyboardButton("💬 Write a Review", url=clean_chat_id)])
+            keyboard.append([InlineKeyboardButton("💬 သုံးသပ်ချက်ရေးသားပါ", url=clean_chat_id)])
 
     return InlineKeyboardMarkup(keyboard)
 
@@ -260,12 +278,12 @@ async def search_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clean_chat_id = user_chat_id.strip()
         if not clean_chat_id.lstrip('-').isdigit() and not clean_chat_id.startswith("http"):
             review_url = f"https://t.me/{clean_chat_id.replace('@', '')}"
-            keyboard.append([InlineKeyboardButton("💬 Write a Review", url=review_url)])
+            keyboard.append([InlineKeyboardButton("💬 သုံးသပ်ချက်ရေးသားပါ", url=review_url)])
         elif clean_chat_id.startswith("-100"):
             review_url = f"https://t.me/c/{clean_chat_id.replace('-100', '')}/1"
-            keyboard.append([InlineKeyboardButton("💬 Write a Review", url=review_url)])
+            keyboard.append([InlineKeyboardButton("💬 သုံးသပ်ချက်ရေးသားပါ", url=review_url)])
         elif clean_chat_id.startswith("http://") or clean_chat_id.startswith("https://"):
-            keyboard.append([InlineKeyboardButton("💬 Write a Review", url=clean_chat_id)])
+            keyboard.append([InlineKeyboardButton("💬 သုံးသပ်ချက်ရေးသားပါ", url=clean_chat_id)])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(formatted_post, parse_mode="HTML", reply_markup=reply_markup)
@@ -284,20 +302,25 @@ async def delete_bot_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ ID <b>{search_id}</b> ဖြင့် Post ရှာမတွေ့ပါ။", parse_mode="HTML")
             return
 
-        bot_db_id, title, _, _, _, owner_id, channel_msg_id = bot_data
+        bot_db_id, title, _, _, _, owner_id, _ = bot_data
 
         if owner_id != user_id:
             await update.message.reply_text("❌ ဤ Post သည် သင်၏ Post မဟုတ်ပါသဖြင့် ဖျက်ပိုင်ခွင့် မရှိပါ။", parse_mode="HTML")
             return
 
-        success, msg_id = delete_bot_from_db(bot_db_id, user_id)
+        success, msg_id, extra_msg_id = delete_bot_from_db(bot_db_id, user_id)
         if success:
-            # Delete message from Channel
+            # Delete message(s) from Channel
             if msg_id:
                 try:
                     await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=msg_id)
                 except Exception as e:
-                    logging.error(f"Failed to delete post from channel: {e}")
+                    logging.error(f"ချန်နယ်မှ ပို့စ်ကို ဖျက်၍မရပါ။ {e}")
+            if extra_msg_id:
+                try:
+                    await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=extra_msg_id)
+                except Exception as e:
+                    logging.error(f"Failed to delete extra message from channel: {e}")
 
             await update.message.reply_text(f"✅ Post <b>{title}</b> (ID: <code>{search_id}</code>) ကို Database နှင့် Channel ထဲမှ အောင်မြင်စွာ ဖျက်လိုက်ပါပြီ!", parse_mode="HTML")
         else:
@@ -333,16 +356,23 @@ async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_T
     user_id = query.from_user.id
     bot_db_id = int(query.data.split("delbot_")[1])
 
-    success, channel_msg_id = delete_bot_from_db(bot_db_id, user_id)
+    success, channel_msg_id, extra_msg_id = delete_bot_from_db(bot_db_id, user_id)
 
     if success:
         if channel_msg_id:
             try:
                 await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=channel_msg_id)
-                logging.info(f"Successfully deleted message {channel_msg_id} from channel.")
+                logging.info(f"ချန်နယ်မှ {channel_msg_id} မက်ဆေ့ချ်ကို အောင်မြင်စွာ ဖျက်လိုက်ပါပြီ။")
             except Exception as e:
-                logging.error(f"Failed to delete channel post (Message ID: {channel_msg_id}): {e}")
+                logging.error(f"ချန်နယ်ပို့စ်ကို ဖျက်၍မရပါ။ (မက်ဆေ့ချ် ID: {channel_msg_id}): {e}")
                 await update.effective_message.reply_text(f"⚠️ ချန်နယ်ပို့စ် ဖျက်ခြင်းသတိပေးချက်- {e}")
+        
+        if extra_msg_id:
+            try:
+                await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=extra_msg_id)
+                logging.info(f"ချန်နယ်မှ အပိုမက်ဆေ့ချ် {extra_msg_id} ကို အောင်မြင်စွာ ဖျက်ပစ်လိုက်ပါပြီ။")
+            except Exception as e:
+                logging.error(f"အပိုမက်ဆေ့ချ်ကို ဖျက်၍မရပါ (မက်ဆေ့ချ် ID - {extra_msg_id}) - {e}")
 
         try:
             await query.edit_message_text("✅ Post ကို ဖျက်လိုက်ပါပြီ!")
@@ -354,7 +384,7 @@ async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_T
         except Exception as e:
             # Telegram throws "Message is not modified" if the text is identical
             # to what's already shown - safe to ignore.
-            logging.info(f"Edit skipped (likely unchanged message): {e}")
+            logging.info(f"ပြင်ဆင်မှုကို ကျော်သွားခဲ့သည် (စာသားမှာ ပြောင်းလဲမှုမရှိဟု ယူဆရသည်) - {e}")
 
 
 # --- BUTTON CLICK HANDLER (VOTES) ---
@@ -367,7 +397,7 @@ async def handle_button_clicks(update: Update, context: ContextTypes.DEFAULT_TYP
     # --- VOTES ---
     reply_markup = query.message.reply_markup
     if not reply_markup or not reply_markup.inline_keyboard:
-        await query.answer("Cannot process action.", show_alert=True)
+        await query.answer("လုပ်ဆောင်ချက်ကို ဆောင်ရွက်၍မရပါ။", show_alert=True)
         return
 
     # inline_keyboard is a tuple of tuples - convert to lists so it's mutable
@@ -437,11 +467,11 @@ async def handle_back_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("🔙 <b>သင့် Bot အတွက် Hashtag များကို ပြန်လည် ရေးပေးပါ -</b>\n\n/skip ဟု ပို့နိုင်ပါသည်။", parse_mode="HTML")
         return HASHTAGS
     elif prev_state == CHAT_ID:
-        await update.message.reply_text("🔙 <b>What is your Chat Id?</b>\n\nIf you don't have one, send /skip", parse_mode="HTML")
+        await update.message.reply_text("🔙 <b>သင့်ရဲ့ Chat ID က ဘာလဲ။</b>\n\nသင့်မှာ မရှိဘူးဆိုရင် /skip လို့ ပို့လိုက်ပါ။", parse_mode="HTML")
         return CHAT_ID
     elif prev_state == CREATOR:
         context.user_data["creators"] = []
-        await update.message.reply_text("🔙 <b>Please send Creator/Owner Username (e.g., @username)</b>\n\nIf you don't want to add, send /skip", parse_mode="HTML")
+        await update.message.reply_text("🔙 <b>ဖန်တီးသူ သို့မဟုတ် ပိုင်ရှင်၏ အသုံးပြုသူအမည် (Username) ကို ပေးပို့ပေးပါ။ (e.g., @username)</b>\n\nထည့်သွင်းလိုခြင်းမရှိပါက /skip ဟု ပို့ပေးပါ။", parse_mode="HTML")
         return CREATOR
 
     return current_state
@@ -451,7 +481,7 @@ async def handle_back_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["current_state"] = TITLE
     await update.message.reply_text(
-        "Welcome to the Bot Submission Assistant! 🤖\n\n"
+        "Bot တင်သွင်းခြင်းဆိုင်ရာ လက်ထောက်အစီအစဉ်မှ ကြိုဆိုပါသည်! 🤖\n\n"
         "channel join ရန် https://t.me/AdvertiseYourBotChat\n\n"
         "Commands:\n"
         "• /start - Bot အသစ် တင်ရန်\n"
@@ -523,7 +553,7 @@ async def get_hashtags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     context.user_data["current_state"] = CHAT_ID
     await update.message.reply_text(
-        "💬 <b>What is your Chat Id?</b>\n\nIf you don't have one, send /skip or get ID from @userinfobot",
+        "💬 <b>သင့်ရဲ့ Chat ID က ဘာလဲ။</b>\n\nသင့်တွင် Chat ID မရှိပါက /skip ဟု ပေးပို့ပါ သို့မဟုတ် @userinfobot ထံမှ ID ရယူပါ။",
         parse_mode="HTML",
     )
     return CHAT_ID
@@ -536,7 +566,7 @@ async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     context.user_data["current_state"] = CREATOR
 
     await update.message.reply_text(
-        "👤 <b>Please send Creator/Owner Username (e.g., @username)</b>\n\nIf you don't want to add, send /skip",
+        "👤 <b>ဖန်တီးသူ သို့မဟုတ် ပိုင်ရှင်၏ အသုံးပြုသူအမည် (Username) ကို ပို့ပေးပါ။ (e.g., @username)</b>\n\nထည့်သွင်းလိုခြင်းမရှိပါက /skip ဟု ပို့ပေးပါ။",
         parse_mode="HTML",
     )
     return CREATOR
@@ -555,7 +585,7 @@ async def collect_creators(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data["creators"].append(creator)
 
     await update.message.reply_text(
-        f"✅ Added {creator}!\n\n<b>Add more creator or /skip</b>\n(Or send /done if finished)",
+        f"✅ Added {creator}!\n\n<b>ဖန်တီးသူ ထပ်မံထည့်သွင်းပါ သို့မဟုတ် /skip ပို့၍ ကျော်သွားပါ</b>\n( သို့မဟုတ် ပြီးစီးပါက /done ဟု ပို့ပေးပါ။)",
         parse_mode="HTML",
     )
     return CREATOR
@@ -565,7 +595,7 @@ async def send_media_confirmation(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     await context.bot.send_message(
         chat_id=job.chat_id,
-        text="📸🎥 Media saved!\n\n<b>Add more Photos or Videos?</b>\nSend another photo/video, or type /done to finish.",
+        text="📸🎥 Media saved!\n\n<b>ဓာတ်ပုံ သို့မဟုတ် ဗီဒီယိုများ ထပ်မံထည့်သွင်းလိုပါသလား။ သို့မဟုတ် ပြီးဆုံးရန် /done ဟု ရိုက်ထည့်ပါ။</b>\nSend another photo/video, or type /done to finish.",
         parse_mode="HTML",
     )
 
@@ -616,13 +646,14 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     # Insert into DB first to get a bot_db_id (used for delete/vote callbacks)
     bot_db_id = add_bot_to_db(
         post_id, user_id, title, link, description, hashtags,
-        user_chat_id or "None", creator_str, 0, has_media, media_type,
+        user_chat_id or "None", creator_str, 0, 0, has_media, media_type,
     )
 
     formatted_post = build_channel_caption(title, description, post_id, hashtags, creator_str)
     reply_markup = build_post_keyboard(bot_db_id, link, user_chat_id or "None")
 
     sent_message = None
+    extra_message_id = 0
 
     try:
         if len(media_list) == 1:
@@ -646,18 +677,19 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
             msgs = await context.bot.send_media_group(chat_id=CHANNEL_ID, media=media_group)
             sent_message = msgs[0]
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=f"💬 Interactive options for <b>{title}</b>:", parse_mode="HTML", reply_markup=reply_markup)
+            options_msg = await context.bot.send_message(chat_id=CHANNEL_ID, text=f"💬 Interactive options for <b>{title}</b>:", parse_mode="HTML", reply_markup=reply_markup)
+            extra_message_id = options_msg.message_id
         else:
             sent_message = await context.bot.send_message(chat_id=CHANNEL_ID, text=formatted_post, parse_mode="HTML", reply_markup=reply_markup)
 
-        # Update post with actual channel message ID
+        # Update post with actual channel message IDs
         if sent_message:
-            update_channel_message_id(bot_db_id, sent_message.message_id)
+            update_channel_message_ids(bot_db_id, sent_message.message_id, extra_message_id)
 
         await update.message.reply_text(f"✅ သင့် Bot ကို Channel ထဲသို့ အောင်မြင်စွာ တင်ပေးလိုက်ပါပြီ!\n🆔 Post ID: <code>{post_id}</code>", parse_mode="HTML")
     except Exception as e:
         await update.message.reply_text("⚠️ Post တင်ရာတွင် Error ဖြစ်ပေါ်နေပါသည်။ Admin Permission စစ်ဆေးပါ။")
-        logging.error(f"Failed to post to channel: {e}")
+        logging.error(f"ချန်နယ်သို့ ပို့စ်တင်၍မအောင်မြင်ပါ - {e}")
 
     context.user_data.clear()
     return ConversationHandler.END
@@ -698,8 +730,19 @@ def main():
 
     app.add_handler(CallbackQueryHandler(handle_button_clicks, pattern="^(vote_up|vote_down)$"))
 
-    print("Bot is running...")
-    app.run_polling()
+    print("Bot is starting...")
+
+    if WEBHOOK_URL:
+        logging.info(f"Starting webhook on port {PORT} | URL: {WEBHOOK_URL}")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=WEBHOOK_URL,
+        )
+    else:
+        logging.info("Starting polling (no RENDER_EXTERNAL_HOSTNAME set)")
+        app.run_polling()
 
 
 if __name__ == "__main__":
