@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import html
 import re
 import random
 import string
@@ -240,9 +241,9 @@ def build_post_keyboard(bot_db_id: int, link: str, chat_id: str, like_count: int
 def build_channel_caption(title: str, description: str, post_id: str, hashtags: str,
                            creator_str: str) -> str:
     hashtag_str = f"🏷️ {hashtags}\n" if hashtags and hashtags != "None" else ""
-    desc_str = f"📝 <b>အသေးစိတ်:</b>\n{description}\n\n" if description else ""
+    desc_str = f"📝 <b>အသေးစိတ်:</b>\n{html.escape(description)}\n\n" if description else ""
     return (
-        f"🤖 <b>{title}</b>\n\n"
+        f"🤖 <b>{html.escape(title)}</b>\n\n"
         f"{desc_str}"
         f"🆔 <b>ID:</b> <code>{post_id}</code>\n"
         f"{hashtag_str}"
@@ -267,7 +268,7 @@ async def search_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hashtag_str = f"🏷️ {hashtags}\n" if hashtags and hashtags != "None" else ""
 
     formatted_post = (
-        f"🤖 <b>{title}</b>\n\n"
+        f"🤖 <b>{html.escape(title)}</b>\n\n"
         f"🆔 <b>ID:</b> <code>{search_id}</code>\n"
         f"{hashtag_str}"
     )
@@ -637,7 +638,7 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     user = update.effective_user
     user_id = user.id
 
-    creator_str = ", ".join(creators) if creators else (f"@{user.username}" if user.username else f"<a href='tg://user?id={user_id}'>{user.first_name}</a>")
+    creator_str = ", ".join(creators) if creators else (f"@{user.username}" if user.username else f'<a href="tg://user?id={user_id}">{html.escape(user.first_name)}</a>')
 
     post_id = generate_unique_post_id()
 
