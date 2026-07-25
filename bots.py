@@ -4,6 +4,7 @@ import re
 import random
 import string
 import os
+import asyncio
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -72,14 +73,14 @@ def init_db():
             dislikes INTEGER DEFAULT 0
         )
     """)
-    
+
     # Migrate existing DBs: add extra_message_id if missing
     try:
         cursor.execute("ALTER TABLE user_bots ADD COLUMN extra_message_id INTEGER DEFAULT 0")
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists
-    
+
     conn.commit()
     conn.close()
 
@@ -89,7 +90,7 @@ def generate_unique_post_id() -> str:
     cursor = conn.cursor()
 
     while True:
-        random_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        random_id = ''''''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
         cursor.execute("SELECT 1 FROM user_bots WHERE post_id = ?", (random_id,))
         if not cursor.fetchone():
             conn.close()
@@ -225,12 +226,12 @@ def build_post_keyboard(bot_db_id: int, link: str, chat_id: str, like_count: int
         clean_chat_id = chat_id.strip()
         if not clean_chat_id.lstrip('-').isdigit() and not clean_chat_id.startswith("http"):
             review_url = f"https://t.me/{clean_chat_id.replace('@', '')}"
-            keyboard.append([InlineKeyboardButton("💬 သုံးသပ်ချက်ရေးသားပါ", url=review_url)])
+            keyboard.append([InlineKeyboardButton("💬 Write a Review", url=review_url)])
         elif clean_chat_id.startswith("-100"):
             review_url = f"https://t.me/c/{clean_chat_id.replace('-100', '')}/1"
-            keyboard.append([InlineKeyboardButton("💬 သုံးသပ်ချက်ရေးသားပါ", url=review_url)])
+            keyboard.append([InlineKeyboardButton("💬 Write a Review", url=review_url)])
         elif clean_chat_id.startswith("http://") or clean_chat_id.startswith("https://"):
-            keyboard.append([InlineKeyboardButton("💬 သုံးသပ်ချက်ရေးသားပါ", url=clean_chat_id)])
+            keyboard.append([InlineKeyboardButton("💬 Write a Review", url=clean_chat_id)])
 
     return InlineKeyboardMarkup(keyboard)
 
@@ -278,12 +279,12 @@ async def search_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clean_chat_id = user_chat_id.strip()
         if not clean_chat_id.lstrip('-').isdigit() and not clean_chat_id.startswith("http"):
             review_url = f"https://t.me/{clean_chat_id.replace('@', '')}"
-            keyboard.append([InlineKeyboardButton("💬 သုံးသပ်ချက်ရေးသားပါ", url=review_url)])
+            keyboard.append([InlineKeyboardButton("💬 Write a Review", url=review_url)])
         elif clean_chat_id.startswith("-100"):
             review_url = f"https://t.me/c/{clean_chat_id.replace('-100', '')}/1"
-            keyboard.append([InlineKeyboardButton("💬 သုံးသပ်ချက်ရေးသားပါ", url=review_url)])
+            keyboard.append([InlineKeyboardButton("💬 Write a Review", url=review_url)])
         elif clean_chat_id.startswith("http://") or clean_chat_id.startswith("https://"):
-            keyboard.append([InlineKeyboardButton("💬 သုံးသပ်ချက်ရေးသားပါ", url=clean_chat_id)])
+            keyboard.append([InlineKeyboardButton("💬 Write a Review", url=clean_chat_id)])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(formatted_post, parse_mode="HTML", reply_markup=reply_markup)
@@ -315,7 +316,7 @@ async def delete_bot_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=msg_id)
                 except Exception as e:
-                    logging.error(f"ချန်နယ်မှ ပို့စ်ကို ဖျက်၍မရပါ။ {e}")
+                    logging.error(f"Failed to delete post from channel: {e}")
             if extra_msg_id:
                 try:
                     await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=extra_msg_id)
@@ -362,17 +363,17 @@ async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_T
         if channel_msg_id:
             try:
                 await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=channel_msg_id)
-                logging.info(f"ချန်နယ်မှ {channel_msg_id} မက်ဆေ့ချ်ကို အောင်မြင်စွာ ဖျက်လိုက်ပါပြီ။")
+                logging.info(f"Successfully deleted message {channel_msg_id} from channel.")
             except Exception as e:
-                logging.error(f"ချန်နယ်ပို့စ်ကို ဖျက်၍မရပါ။ (မက်ဆေ့ချ် ID: {channel_msg_id}): {e}")
+                logging.error(f"Failed to delete channel post (Message ID: {channel_msg_id}): {e}")
                 await update.effective_message.reply_text(f"⚠️ ချန်နယ်ပို့စ် ဖျက်ခြင်းသတိပေးချက်- {e}")
-        
+
         if extra_msg_id:
             try:
                 await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=extra_msg_id)
-                logging.info(f"ချန်နယ်မှ အပိုမက်ဆေ့ချ် {extra_msg_id} ကို အောင်မြင်စွာ ဖျက်ပစ်လိုက်ပါပြီ။")
+                logging.info(f"Successfully deleted extra message {extra_msg_id} from channel.")
             except Exception as e:
-                logging.error(f"အပိုမက်ဆေ့ချ်ကို ဖျက်၍မရပါ (မက်ဆေ့ချ် ID - {extra_msg_id}) - {e}")
+                logging.error(f"Failed to delete extra message (Message ID: {extra_msg_id}): {e}")
 
         try:
             await query.edit_message_text("✅ Post ကို ဖျက်လိုက်ပါပြီ!")
@@ -384,7 +385,7 @@ async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_T
         except Exception as e:
             # Telegram throws "Message is not modified" if the text is identical
             # to what's already shown - safe to ignore.
-            logging.info(f"ပြင်ဆင်မှုကို ကျော်သွားခဲ့သည် (စာသားမှာ ပြောင်းလဲမှုမရှိဟု ယူဆရသည်) - {e}")
+            logging.info(f"Edit skipped (likely unchanged message): {e}")
 
 
 # --- BUTTON CLICK HANDLER (VOTES) ---
@@ -397,7 +398,7 @@ async def handle_button_clicks(update: Update, context: ContextTypes.DEFAULT_TYP
     # --- VOTES ---
     reply_markup = query.message.reply_markup
     if not reply_markup or not reply_markup.inline_keyboard:
-        await query.answer("လုပ်ဆောင်ချက်ကို ဆောင်ရွက်၍မရပါ။", show_alert=True)
+        await query.answer("Cannot process action.", show_alert=True)
         return
 
     # inline_keyboard is a tuple of tuples - convert to lists so it's mutable
@@ -467,11 +468,11 @@ async def handle_back_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("🔙 <b>သင့် Bot အတွက် Hashtag များကို ပြန်လည် ရေးပေးပါ -</b>\n\n/skip ဟု ပို့နိုင်ပါသည်။", parse_mode="HTML")
         return HASHTAGS
     elif prev_state == CHAT_ID:
-        await update.message.reply_text("🔙 <b>သင့်ရဲ့ Chat ID က ဘာလဲ။</b>\n\nသင့်မှာ မရှိဘူးဆိုရင် /skip လို့ ပို့လိုက်ပါ။", parse_mode="HTML")
+        await update.message.reply_text("🔙 <b>What is your Chat Id?</b>\n\nIf you don't have one, send /skip", parse_mode="HTML")
         return CHAT_ID
     elif prev_state == CREATOR:
         context.user_data["creators"] = []
-        await update.message.reply_text("🔙 <b>ဖန်တီးသူ သို့မဟုတ် ပိုင်ရှင်၏ အသုံးပြုသူအမည် (Username) ကို ပေးပို့ပေးပါ။ (e.g., @username)</b>\n\nထည့်သွင်းလိုခြင်းမရှိပါက /skip ဟု ပို့ပေးပါ။", parse_mode="HTML")
+        await update.message.reply_text("🔙 <b>Please send Creator/Owner Username (e.g., @username)</b>\n\nIf you don't want to add, send /skip", parse_mode="HTML")
         return CREATOR
 
     return current_state
@@ -481,7 +482,7 @@ async def handle_back_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["current_state"] = TITLE
     await update.message.reply_text(
-        "Bot တင်သွင်းခြင်းဆိုင်ရာ လက်ထောက်အစီအစဉ်မှ ကြိုဆိုပါသည်! 🤖\n\n"
+        "Welcome to the Bot Submission Assistant! 🤖\n\n"
         "channel join ရန် https://t.me/AdvertiseYourBotChat\n\n"
         "Commands:\n"
         "• /start - Bot အသစ် တင်ရန်\n"
@@ -553,7 +554,7 @@ async def get_hashtags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     context.user_data["current_state"] = CHAT_ID
     await update.message.reply_text(
-        "💬 <b>သင့်ရဲ့ Chat ID က ဘာလဲ။</b>\n\nသင့်တွင် Chat ID မရှိပါက /skip ဟု ပေးပို့ပါ သို့မဟုတ် @userinfobot ထံမှ ID ရယူပါ။",
+        "💬 <b>What is your Chat Id?</b>\n\nIf you don't have one, send /skip or get ID from @userinfobot",
         parse_mode="HTML",
     )
     return CHAT_ID
@@ -566,7 +567,7 @@ async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     context.user_data["current_state"] = CREATOR
 
     await update.message.reply_text(
-        "👤 <b>ဖန်တီးသူ သို့မဟုတ် ပိုင်ရှင်၏ အသုံးပြုသူအမည် (Username) ကို ပို့ပေးပါ။ (e.g., @username)</b>\n\nထည့်သွင်းလိုခြင်းမရှိပါက /skip ဟု ပို့ပေးပါ။",
+        "👤 <b>Please send Creator/Owner Username (e.g., @username)</b>\n\nIf you don't want to add, send /skip",
         parse_mode="HTML",
     )
     return CREATOR
@@ -585,7 +586,7 @@ async def collect_creators(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data["creators"].append(creator)
 
     await update.message.reply_text(
-        f"✅ Added {creator}!\n\n<b>ဖန်တီးသူ ထပ်မံထည့်သွင်းပါ သို့မဟုတ် /skip ပို့၍ ကျော်သွားပါ</b>\n( သို့မဟုတ် ပြီးစီးပါက /done ဟု ပို့ပေးပါ။)",
+        f"✅ Added {creator}!\n\n<b>Add more creator or /skip</b>\n(Or send /done if finished)",
         parse_mode="HTML",
     )
     return CREATOR
@@ -595,7 +596,7 @@ async def send_media_confirmation(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     await context.bot.send_message(
         chat_id=job.chat_id,
-        text="📸🎥 Media saved!\n\n<b>ဓာတ်ပုံ သို့မဟုတ် ဗီဒီယိုများ ထပ်မံထည့်သွင်းလိုပါသလား။ သို့မဟုတ် ပြီးဆုံးရန် /done ဟု ရိုက်ထည့်ပါ။</b>\nSend another photo/video, or type /done to finish.",
+        text="📸🎥 Media saved!\n\n<b>Add more Photos or Videos?</b>\nSend another photo/video, or type /done to finish.",
         parse_mode="HTML",
     )
 
@@ -689,7 +690,7 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await update.message.reply_text(f"✅ သင့် Bot ကို Channel ထဲသို့ အောင်မြင်စွာ တင်ပေးလိုက်ပါပြီ!\n🆔 Post ID: <code>{post_id}</code>", parse_mode="HTML")
     except Exception as e:
         await update.message.reply_text("⚠️ Post တင်ရာတွင် Error ဖြစ်ပေါ်နေပါသည်။ Admin Permission စစ်ဆေးပါ။")
-        logging.error(f"ချန်နယ်သို့ ပို့စ်တင်၍မအောင်မြင်ပါ - {e}")
+        logging.error(f"Failed to post to channel: {e}")
 
     context.user_data.clear()
     return ConversationHandler.END
@@ -746,4 +747,10 @@ def main():
 
 
 if __name__ == "__main__":
+    # Fix for Python 3.12+ / 3.14: ensure event loop exists in main thread
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
     main()
