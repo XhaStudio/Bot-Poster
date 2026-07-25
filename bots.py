@@ -725,7 +725,7 @@ def main():
     )
 
     app.add_handler(conv_handler)
-    app.add_handler(CommandHandler("mybot", my_bots))
+    app.add_handler(CommandHandler("myposts", my_bots))
     app.add_handler(CommandHandler("search", search_post))
     app.add_handler(CommandHandler("del", delete_bot_menu))
     app.add_handler(CallbackQueryHandler(handle_delete_callback, pattern="^delbot_"))
