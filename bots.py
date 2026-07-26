@@ -354,7 +354,7 @@ async def delete_bot_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    await safe_answer(query)
 
     user_id = query.from_user.id
     bot_db_id = int(query.data.split("delbot_")[1])
@@ -389,6 +389,19 @@ async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_T
             logging.info(f"Edit skipped (likely unchanged message): {e}")
 
 
+# --- SAFE CALLBACK ANSWER ---
+async def safe_answer(query, text: str = None, show_alert: bool = False):
+    """query.answer() ကို ခေါ်သည်၊ ဒါပေမဲ့ Callback Query သက်တမ်းကုန်/မမှန်ကန်လျှင်
+    (ဥပမာ - Bot အိပ်နေရာမှ ပြန်နိုးရာတွင် ကြာသွားခြင်း) Error ဖြင့် Crash မဖြစ်စေရန် ဖမ်းထားသည်။"""
+    try:
+        if text is not None:
+            await query.answer(text, show_alert=show_alert)
+        else:
+            await query.answer()
+    except Exception as e:
+        logging.warning(f"Callback query answer failed (likely expired): {e}")
+
+
 # --- BUTTON CLICK HANDLER (VOTES) ---
 async def handle_button_clicks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -399,7 +412,7 @@ async def handle_button_clicks(update: Update, context: ContextTypes.DEFAULT_TYP
     # --- VOTES ---
     reply_markup = query.message.reply_markup
     if not reply_markup or not reply_markup.inline_keyboard:
-        await query.answer("⚠️ ဤလုပ်ဆောင်ချက်ကို လုပ်ဆောင်၍ မရပါ။", show_alert=True)
+        await safe_answer(query, "⚠️ ဤလုပ်ဆောင်ချက်ကို လုပ်ဆောင်၍ မရပါ။", show_alert=True)
         return
 
     # inline_keyboard သည် tuple of tuples ဖြစ်သောကြောင့် - list သို့ ပြောင်း၍ ပြင်ဆင်နိုင်အောင်လုပ်ခြင်း
@@ -415,25 +428,25 @@ async def handle_button_clicks(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if action == "vote_up":
         if existing_vote == "up":
-            await query.answer("✅ ဤ Post ကို Like နှိပ်ပြီးသား ဖြစ်ပါသည်။", show_alert=True)
+            await safe_answer(query, "✅ ဤ Post ကို Like နှိပ်ပြီးသား ဖြစ်ပါသည်။", show_alert=True)
             return
         if existing_vote == "down":
             dislike_count = max(0, dislike_count - 1)
         like_count += 1
         set_user_vote(user_id, message_id, "up")
-        await query.answer("ဤ Post ကို Like နှိပ်လိုက်ပါပြီ! 👍")
+        await safe_answer(query, "ဤ Post ကို Like နှိပ်လိုက်ပါပြီ! 👍")
 
     elif action == "vote_down":
         if existing_vote == "down":
-            await query.answer("✅ ဤ Post ကို Dislike နှိပ်ပြီးသား ဖြစ်ပါသည်။", show_alert=True)
+            await safe_answer(query, "✅ ဤ Post ကို Dislike နှိပ်ပြီးသား ဖြစ်ပါသည်။", show_alert=True)
             return
         if existing_vote == "up":
             like_count = max(0, like_count - 1)
         dislike_count += 1
         set_user_vote(user_id, message_id, "down")
-        await query.answer("ဤ Post ကို Dislike နှိပ်လိုက်ပါပြီ! 👎")
+        await safe_answer(query, "ဤ Post ကို Dislike နှိပ်လိုက်ပါပြီ! 👎")
     else:
-        await query.answer()
+        await safe_answer(query)
         return
 
     first_row[0] = InlineKeyboardButton(f"👍 {like_count}", callback_data="vote_up")
@@ -703,6 +716,13 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
+# --- GLOBAL ERROR HANDLER ---
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    # Unhandled Exception အားလုံးကို ဒီနေရာမှာ ဖမ်းမည် - Bot Crash မဖြစ်စေရန်
+    # (ဥပမာ - Render free tier Cold Start ကြောင့် Callback Query သက်တမ်းကုန်သွားခြင်းစသည်)
+    logging.error(f"Unhandled exception: {context.error}", exc_info=context.error)
+
+
 def main():
     init_db()
 
@@ -725,12 +745,14 @@ def main():
     )
 
     app.add_handler(conv_handler)
-    app.add_handler(CommandHandler("myposts", my_bots))
+    app.add_handler(CommandHandler("mybot", my_bots))
     app.add_handler(CommandHandler("search", search_post))
     app.add_handler(CommandHandler("del", delete_bot_menu))
     app.add_handler(CallbackQueryHandler(handle_delete_callback, pattern="^delbot_"))
 
     app.add_handler(CallbackQueryHandler(handle_button_clicks, pattern="^(vote_up|vote_down)$"))
+
+    app.add_error_handler(error_handler)
 
     print("Bot is starting...")
 
